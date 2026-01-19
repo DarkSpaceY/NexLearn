@@ -1,0 +1,17 @@
+@import 'highlight.js/styles/vs2015.css';
+
+/* 自定义高亮样式 */
+mark {
+  background-color: hsl(47, 95%, 55%); /* 亮黄色 */
+  color: #000;
+  padding: 0.1em 0.2em;
+  border-radius: 0.2em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* 暗黑模式适配 */
+.dark mark {
+  background-color: hsl(47, 95%, 35%);
+  color: #fff;
+}
