@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { X, Loader2, CheckCircle, Plus } from 'lucide-react'
 import { Node } from '@/types'
-import { apiClient } from '@/lib/api'
+import { apiClient, buildRequestConfig } from '@/lib/api'
 import { buildNodeContext, parseTocFromMarkdown } from '@/lib/nodeUtils'
 import { useAppStore } from '@/stores/appStore'
 
@@ -17,7 +17,7 @@ export function IdeaDialog({ node, isOpen, onClose }: IdeaDialogProps) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const { addNode, updateNode, addEdge } = useAppStore()
+  const { addNode, updateNode, addEdge, preferences } = useAppStore()
 
   // 移除自动触发，仅通过用户点击触发，避免重复调用
   // useEffect(() => {
@@ -39,10 +39,13 @@ export function IdeaDialog({ node, isOpen, onClose }: IdeaDialogProps) {
       const nodes = useAppStore.getState().nodes
       const edges = useAppStore.getState().edges
       const context = buildNodeContext(node, nodes, edges, node.summary)
+      const config = buildRequestConfig(useAppStore.getState().preferences)
 
       const result = await apiClient.generateIdeas(node.id, {
         theme: node.theme,
-        context
+        language: preferences.language,
+        context,
+        config
       })
 
       setIdeas(result.ideas)
@@ -78,7 +81,7 @@ export function IdeaDialog({ node, isOpen, onClose }: IdeaDialogProps) {
         const childNodeId = crypto.randomUUID()
         const childNode: Node = {
           id: childNodeId,
-          projectId: 'default',
+          projectId: node.projectId,
           parentId: node.id,
           theme: ideaText,
           summary: '',
@@ -107,7 +110,7 @@ export function IdeaDialog({ node, isOpen, onClose }: IdeaDialogProps) {
         const edgeId = crypto.randomUUID()
         const edge = {
           id: edgeId,
-          projectId: 'default',
+          projectId: node.projectId,
           fromNodeId: node.id,
           toNodeId: childNodeId,
           fromAnchor: 'bottom' as const,
@@ -122,13 +125,16 @@ export function IdeaDialog({ node, isOpen, onClose }: IdeaDialogProps) {
         try {
           // 获取子节点的上下文（统一构建：已添加边，能正确识别父/兄弟/子）
           const childContext = buildNodeContext(childNode, useAppStore.getState().nodes, useAppStore.getState().edges, '')
+          const config = buildRequestConfig(useAppStore.getState().preferences)
 
           const result = await apiClient.generateNode(childNodeId, {
             theme: ideaText,
             description: ideaText,
-            language: 'zh-CN',
-            length: 'medium',
-            context: childContext
+            language: preferences.language,
+            length: preferences.generationLength,
+            style: preferences.writingStyle || undefined,
+            context: childContext,
+            config
           })
 
           const updatedChildNode: Node = {

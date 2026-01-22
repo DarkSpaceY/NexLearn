@@ -2,14 +2,32 @@ import OpenAI from 'openai'
 import axios from 'axios'
 import { logger } from '../utils/logger'
 
-// LLM Provider configuration - dynamically read from environment
-const getLLMProvider = (): string => process.env.LLM_PROVIDER || 'openai'
+export interface LLMRuntimeConfig {
+  provider?: 'openai' | 'azure' | 'custom' | 'ollama'
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+  ollamaBaseUrl?: string
+  ollamaModel?: string
+  ollamaApiKey?: string
+}
+
+const resolveLLMProvider = (config?: LLMRuntimeConfig): 'openai' | 'ollama' => {
+  const raw = config?.provider || 'openai'
+  return raw === 'ollama' ? 'ollama' : 'openai'
+}
+
+const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+const DEFAULT_OPENAI_MODEL = 'gpt-4-turbo-preview'
+const DEFAULT_OLLAMA_BASE_URL = 'http://localhost:11434'
+const DEFAULT_OLLAMA_MODEL = 'gpt-oss:120b-cloud'
 
 export interface GenerateNodeContentParams {
   theme: string
   searchResults: SearchResult[]
   language: string
   length: 'short' | 'medium' | 'long'
+  style?: string
   context?: {
     visibleText?: string
     nodeTree?: string
@@ -66,6 +84,7 @@ const NODE_GENERATION_TEMPLATE = `
 上下文：
 - 用户输入主题：{{theme}}
 - 用户描述：{{description}}
+- 写作风格：{{style}}
 - 当前界面可见内容（若有）：{{visibleText}}
 - 相关节点树片段（父/子/同级）：{{nodeTree}}
 - 检索摘要（来自联网检索）：
@@ -134,15 +153,20 @@ export class LLMService {
     }
   }
 
-  private async callOpenAI(messages: any[], options: any = {}): Promise<string> {
-    // Initialize OpenAI client only when needed
+  private async callOpenAI(messages: any[], options: any = {}, config?: LLMRuntimeConfig): Promise<string> {
+    const apiKey = config?.apiKey?.trim()
+    if (!apiKey) {
+      throw new Error('Missing LLM API key')
+    }
+    const baseUrl = config?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL
+    const model = config?.model?.trim() || DEFAULT_OPENAI_MODEL
     const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      apiKey,
+      baseURL: baseUrl,
     })
 
     const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4-turbo-preview',
+      model,
       messages,
       temperature: options.temperature || 0.7,
     })
@@ -155,9 +179,9 @@ export class LLMService {
     return content
   }
 
-  private async callOllama(messages: any[], options: any = {}): Promise<string> {
-    const model = process.env.OLLAMA_MODEL || 'gpt-oss:120b-cloud'
-    let baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434'
+  private async callOllama(messages: any[], options: any = {}, config?: LLMRuntimeConfig): Promise<string> {
+    const model = config?.ollamaModel || DEFAULT_OLLAMA_MODEL
+    let baseUrl = config?.ollamaBaseUrl || DEFAULT_OLLAMA_BASE_URL
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
@@ -173,7 +197,7 @@ export class LLMService {
     let useProxy = false
     if (model.toLowerCase().includes('cloud')) {
       baseUrl = 'https://ollama.com'
-      const apiKey = process.env.OLLAMA_API_KEY
+      const apiKey = config?.ollamaApiKey
       if (apiKey) {
         headers['Authorization'] = `Bearer ${apiKey}`
       } else {
@@ -224,15 +248,16 @@ export class LLMService {
       .join('\n')
   }
 
-  async generateNodeContent(params: GenerateNodeContentParams): Promise<string> {
+  async generateNodeContent(params: GenerateNodeContentParams, config?: LLMRuntimeConfig): Promise<string> {
     try {
-      const { theme, searchResults, language, length, context, description } = params
+      const { theme, searchResults, language, length, context, description, style } = params
       const wordCount = this.getWordCount(length)
       const formattedSearchResults = this.formatSearchResults(searchResults)
 
       const prompt = NODE_GENERATION_TEMPLATE
         .replace('{{theme}}', theme)
         .replace('{{description}}', description || '无')
+        .replace('{{style}}', style || '教学风格，层次清晰，通俗易懂')
         .replace('{{visibleText}}', context?.visibleText || '无可见内容')
         .replace('{{nodeTree}}', context?.nodeTree || '无相关节点')
         .replace('{{searchResults}}', formattedSearchResults)
@@ -250,7 +275,7 @@ export class LLMService {
         }
       ]
 
-      const provider = getLLMProvider()
+      const provider = resolveLLMProvider(config)
       logger.info(`Calling ${provider} API for node generation`, {
         theme,
         language,
@@ -260,9 +285,9 @@ export class LLMService {
 
       let content: string
       if (provider === 'ollama') {
-        content = await this.callOllama(messages, { temperature: 0.7 })
+        content = await this.callOllama(messages, { temperature: 0.7 }, config)
       } else {
-        content = await this.callOpenAI(messages, { temperature: 0.7 })
+        content = await this.callOpenAI(messages, { temperature: 0.7 }, config)
       }
 
       if (!content) {
@@ -278,7 +303,7 @@ export class LLMService {
       return content
 
     } catch (error: any) {
-      logger.error(`Failed to generate node content with ${getLLMProvider()}`, {
+      logger.error(`Failed to generate node content with ${resolveLLMProvider(config)}`, {
         error: error.message,
         theme: params.theme,
         stack: error.stack
@@ -287,7 +312,7 @@ export class LLMService {
     }
   }
 
-  async generateIdeas(params: GenerateIdeasParams): Promise<string> {
+  async generateIdeas(params: GenerateIdeasParams, config?: LLMRuntimeConfig): Promise<string> {
     try {
       const { theme, searchResults, language, context } = params
       const formattedSearchResults = this.formatSearchResults(searchResults)
@@ -310,7 +335,7 @@ export class LLMService {
         }
       ]
 
-      const provider = getLLMProvider()
+      const provider = resolveLLMProvider(config)
       logger.info(`Calling ${provider} API for idea generation`, {
         theme,
         language,
@@ -319,9 +344,9 @@ export class LLMService {
 
       let content: string
       if (provider === 'ollama') {
-        content = await this.callOllama(messages, { temperature: 0.8 })
+        content = await this.callOllama(messages, { temperature: 0.8 }, config)
       } else {
-        content = await this.callOpenAI(messages, { temperature: 0.8 })
+        content = await this.callOpenAI(messages, { temperature: 0.8 }, config)
       }
 
       if (!content) {
@@ -337,7 +362,7 @@ export class LLMService {
       return content
 
     } catch (error: any) {
-      logger.error(`Failed to generate ideas with ${getLLMProvider()}`, {
+      logger.error(`Failed to generate ideas with ${resolveLLMProvider(config)}`, {
         error: error.message,
         theme: params.theme,
         stack: error.stack
@@ -346,7 +371,7 @@ export class LLMService {
     }
   }
 
-  async generateMindMap(params: { content: string; language: string; searchResults: SearchResult[] }): Promise<string> {
+  async generateMindMap(params: { content: string; language: string; searchResults: SearchResult[] }, config?: LLMRuntimeConfig): Promise<string> {
     try {
       const { content, language, searchResults } = params
       const formattedSearchResults = this.formatSearchResults(searchResults)
@@ -367,7 +392,7 @@ export class LLMService {
         }
       ]
 
-      const provider = getLLMProvider()
+      const provider = resolveLLMProvider(config)
       logger.info(`Calling ${provider} API for mindmap generation`, {
         language,
         searchResultCount: searchResults?.length || 0
@@ -375,9 +400,9 @@ export class LLMService {
 
       let contentStr: string
       if (provider === 'ollama') {
-        contentStr = await this.callOllama(messages, { temperature: 0.5 })
+        contentStr = await this.callOllama(messages, { temperature: 0.5 }, config)
       } else {
-        contentStr = await this.callOpenAI(messages, { temperature: 0.5 })
+        contentStr = await this.callOpenAI(messages, { temperature: 0.5 }, config)
       }
 
       if (!contentStr) {
@@ -391,7 +416,7 @@ export class LLMService {
 
       return contentStr
     } catch (error: any) {
-      logger.error(`Failed to generate mindmap with ${getLLMProvider()}`, {
+      logger.error(`Failed to generate mindmap with ${resolveLLMProvider(config)}`, {
         error: error.message,
         stack: error.stack
       })
@@ -399,7 +424,7 @@ export class LLMService {
     }
   }
 
-  async chat(params: { message: string; history?: any[]; context?: any }): Promise<string> {
+  async chat(params: { message: string; history?: any[]; context?: any }, config?: LLMRuntimeConfig): Promise<string> {
     try {
       const { message, history = [], context } = params
 
@@ -415,14 +440,14 @@ export class LLMService {
         { role: 'user', content: `上下文信息：\n${JSON.stringify(context || {})}\n\n用户问题：${message}` }
       ]
 
-      const provider = getLLMProvider()
+      const provider = resolveLLMProvider(config)
       logger.info(`Calling ${provider} API for chat`, { messageLength: message.length })
 
       let content: string
       if (provider === 'ollama') {
-        content = await this.callOllama(messages, { temperature: 0.7 })
+        content = await this.callOllama(messages, { temperature: 0.7 }, config)
       } else {
-        content = await this.callOpenAI(messages, { temperature: 0.7 })
+        content = await this.callOpenAI(messages, { temperature: 0.7 }, config)
       }
 
       return content

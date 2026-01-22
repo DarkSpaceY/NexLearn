@@ -1,6 +1,6 @@
 import * as Tooltip from '@radix-ui/react-tooltip'
 import React, { useState, useRef, useEffect, useCallback } from 'react'
-import { ChevronLeft, Copy, Heart, Wand2, Network, MessageSquare, PlusCircle, Edit3 } from 'lucide-react'
+import { ChevronLeft, Copy, Heart, Wand2, Network } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -9,7 +9,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus, materialLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Node } from '@/types'
 import { useAppStore } from '@/stores/appStore'
-import { apiClient } from '@/lib/api'
+import { apiClient, buildRequestConfig } from '@/lib/api'
 import copy from 'clipboard-copy'
 import { buildNodeContext, parseTocFromMarkdown, createNode } from '@/lib/nodeUtils'
 import { runPython, PyProgress } from '@/lib/pythonSandbox'
@@ -53,7 +53,7 @@ export function NodeDetailView({ node: initialNode, onClose }: NodeDetailViewPro
     title: '',
     animId: undefined
   })
-  
+
   const [annotationDialog, setAnnotationDialog] = useState<{ 
     isOpen: boolean; 
     text: string; 
@@ -64,6 +64,14 @@ export function NodeDetailView({ node: initialNode, onClose }: NodeDetailViewPro
     text: '',
     targetText: ''
   })
+
+  // 右键批注/收藏时的上下文菜单状态
+  const [annotationContextMenu, setAnnotationContextMenu] = useState<{
+    x: number
+    y: number
+    targetType: 'annotation' | 'favorite'
+    id: string
+  } | null>(null)
 
   // 监听动画状态变化，实现自动更新
   useEffect(() => {
@@ -277,10 +285,16 @@ ${safeCode}
 
   const [viewMode, setViewMode] = useState<'text' | 'mindmap'>('text')
   const [mindmapData, setMindmapData] = useState<{ nodes: any[], edges: any[] } | null>(null)
+  const [mindmapGenerating, setMindmapGenerating] = useState(false)
   const [selectedMindmapNode, setSelectedMindmapNode] = useState<string | null>(null)
 
   // 根据 TOC 生成思维导图数据
   useEffect(() => {
+    if (node.mindmap && node.mindmap.nodes?.length) {
+      setMindmapData(node.mindmap)
+      return
+    }
+
     if (!computedToc.length) {
       setMindmapData(null)
       return
@@ -391,15 +405,42 @@ ${safeCode}
     })
 
     setMindmapData({ nodes, edges })
-  }, [computedToc, node.theme, node.contentMd, node.annotations, node.animations])
+  }, [computedToc, node.theme, node.contentMd, node.annotations, node.animations, node.mindmap])
 
   const handleMindMapClick = useCallback(() => {
-    setViewMode(prev => prev === 'text' ? 'mindmap' : 'text')
+    setViewMode(prev => (prev === 'text' ? 'mindmap' : 'text'))
   }, [])
 
   const handleNodeClick = useCallback((nodeId: string) => {
     setSelectedMindmapNode(prev => prev === nodeId ? null : nodeId)
   }, [])
+
+  // 删除批注或收藏
+  const handleDeleteAnnotationOrFavorite = useCallback(() => {
+    if (!annotationContextMenu) return
+
+    const targetId = annotationContextMenu.id
+    const currentAnnotations = node.annotations || []
+    const nextAnnotations = currentAnnotations.filter(anno => anno.id !== targetId)
+
+    // 更新节点上的批注/收藏列表
+    updateNode(node.id, { annotations: nextAnnotations })
+    setAnnotationContextMenu(null)
+  }, [annotationContextMenu, node.annotations, node.id, updateNode])
+
+  // 监听 ESC 键关闭上下文菜单
+  useEffect(() => {
+    if (!annotationContextMenu) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAnnotationContextMenu(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [annotationContextMenu])
 
   // 使用 useMemo 缓存 components 对象，防止重渲染导致 DOM 重建和选区丢失
   const markdownComponents = React.useMemo(() => ({
@@ -517,21 +558,34 @@ ${safeCode}
       }
       if (className?.includes('annotation-highlight')) {
         const title = props.title || ''
+        const annotationId = props['data-annotation-id'] as string | undefined
         // 移除原生 title 属性以避免双重提示
         const { title: _, ...rest } = props
         return (
-          <Tooltip.Provider>
+          <span
+            className="border-b-2 border-dashed border-blue-500 cursor-help hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+            {...rest}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              if (!annotationId) return
+              setAnnotationContextMenu({
+                x: event.clientX,
+                y: event.clientY,
+                targetType: 'annotation',
+                id: annotationId,
+              })
+            }}
+          >
+            {/* 使用 Tooltip 显示批注内容，配置全局 Provider 为零延迟 */}
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
-                <span 
-                  className="border-b-2 border-dashed border-blue-500 cursor-help hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-                  {...rest}
-                >
+                <span className="inline">
                   {children}
                 </span>
               </Tooltip.Trigger>
               <Tooltip.Portal>
-                <Tooltip.Content 
+                <Tooltip.Content
                   className="z-50 max-w-xs px-3 py-2 text-sm text-white bg-black rounded-md shadow-md animate-in fade-in-0 zoom-in-95"
                   sideOffset={5}
                 >
@@ -540,20 +594,36 @@ ${safeCode}
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
-          </Tooltip.Provider>
+          </span>
         )
       }
       if (className?.includes('favorite-highlight')) {
+        const favoriteId = props['data-favorite-id'] as string | undefined
         return (
-          <span 
+          <span
             className="border-b-2 border-dashed border-yellow-500 cursor-pointer hover:bg-yellow-100 dark:hover:bg-yellow-900/20 transition-colors"
             {...props}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              if (!favoriteId) return
+              setAnnotationContextMenu({
+                x: event.clientX,
+                y: event.clientY,
+                targetType: 'favorite',
+                id: favoriteId,
+              })
+            }}
           >
             {children}
           </span>
         )
       }
-      return <span className={className} {...props}>{children}</span>
+      return (
+        <span className={className} {...props}>
+          {children}
+        </span>
+      )
     },
     a: ({ href, children, ...props }: any) => {
         if (href?.startsWith('animation:')) {
@@ -901,11 +971,11 @@ ${safeCode}
     // 2. Create markers
     const markers: { index: number; type: 'start' | 'end'; entity: any }[] = []
     entities.forEach(e => {
-       // Validate range
-       if (e.start >= 0 && e.end <= content.length && e.start < e.end) {
-         markers.push({ index: e.start, type: 'start', entity: e })
-         markers.push({ index: e.end, type: 'end', entity: e })
-       }
+      // 校验范围，避免越界
+      if (e.start >= 0 && e.end <= content.length && e.start < e.end) {
+        markers.push({ index: e.start, type: 'start', entity: e })
+        markers.push({ index: e.end, type: 'end', entity: e })
+      }
     })
     
     // Sort markers: index asc. If index equal, 'end' before 'start'
@@ -931,7 +1001,7 @@ ${safeCode}
           if (m.entity.type === 'favorite') {
              result += `<span id="fav-${m.entity.data.id}" class="favorite-highlight" data-favorite-id="${m.entity.data.id}">`
           } else if (m.entity.type === 'comment') {
-             result += `<span class="annotation-highlight" title="${m.entity.data.text}">`
+             result += `<span class="annotation-highlight" data-annotation-id="${m.entity.data.id}" title="${m.entity.data.text}">`
           } else if (m.entity.type === 'highlight') {
              result += `<a href="highlight:true">`
           } else if (m.entity.type === 'animation') {
@@ -1186,7 +1256,10 @@ ${safeCode}
       // 后台生成
       ;(async () => {
         try {
-          const result = await apiClient.generateAnimationSafe(text, { theme: node.theme })
+          const state = useAppStore.getState()
+          const config = buildRequestConfig(state.preferences)
+          const context = buildNodeContext(node, state.nodes, state.edges, text)
+          const result = await apiClient.generateAnimationSafe(text, { ...context, theme: node.theme }, config)
           
           const currentNode = useAppStore.getState().nodes.find(n => n.id === node.id)
           if (!currentNode) return
@@ -1253,12 +1326,16 @@ ${safeCode}
       ;(async () => {
         try {
           const ctx = buildNodeContext(childNode, nodes, edges, text)
+          const config = buildRequestConfig(useAppStore.getState().preferences)
+          const preferences = useAppStore.getState().preferences
           const result = await apiClient.generateNode(childNode.id, {
             theme: childNode.theme,
             description: text,
-            language: 'zh-CN',
-            length: 'medium',
-            context: ctx
+            language: preferences.language,
+            length: preferences.generationLength,
+            style: preferences.writingStyle || undefined,
+            context: ctx,
+            config
           })
           updateNode(childNode.id, {
             summary: result.summary,
@@ -1279,14 +1356,16 @@ ${safeCode}
   }
 
   return (
-    <Tooltip.Provider delayDuration={200}>
+    <Tooltip.Provider delayDuration={0}>
       <div className="fixed inset-0 z-50 flex bg-background p-4">
       {/* 左侧目录 - 仅在文本模式下显示 */}
       {viewMode === 'text' && (
         <div className="w-64 bg-card border-r border-border flex flex-col">
-          {/* 头部 */}
+          {/* 头部：只保留“目录”标题 */}
           <div className="flex items-center justify-between p-4 border-b border-border">
-            <h2 className="text-lg font-semibold">目录</h2>
+            <div className="flex items-center gap-2 min-w-0">
+              <h2 className="text-lg font-semibold truncate">目录</h2>
+            </div>
           </div>
 
           {/* 目录内容 */}
@@ -1334,8 +1413,18 @@ ${safeCode}
                         if (el) {
                            el.scrollIntoView({ behavior: 'smooth', block: 'center' })
                         } else {
-                           copy(fav.originalText || fav.text)
+                          copy(fav.originalText || fav.text)
                         }
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setAnnotationContextMenu({
+                          x: event.clientX,
+                          y: event.clientY,
+                          targetType: 'favorite',
+                          id: fav.id,
+                        })
                       }}
                       title="点击跳转"
                     >
@@ -1677,35 +1766,49 @@ ${safeCode}
             title="批注"
             onClick={() => handleToolbarAction('annotate')}
           >
-            <Edit3 className="w-4 h-4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M13 7l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
           </button>
           <button
             className="p-1 hover:bg-accent rounded-md"
             title="收藏"
             onClick={() => handleToolbarAction('favorite')}
           >
-            <Heart className="w-4 h-4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+            </svg>
           </button>
           <button
             className="p-1 hover:bg-accent rounded-md"
             title="加入聊天"
             onClick={() => handleToolbarAction('add_to_chat')}
           >
-            <MessageSquare className="w-4 h-4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M4 5h16v10H8l-4 4V5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+            </svg>
           </button>
           <button
             className="p-1 hover:bg-accent rounded-md"
             title="生成动画（占位）"
             onClick={() => handleToolbarAction('generate_animation')}
           >
-            <Wand2 className="w-4 h-4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M3 21l10-10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+              <path d="M14 4l6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+              <path d="M16 2v3M22 8h-3M19.5 4.5l2 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
           </button>
           <button
             className="p-1 hover:bg-accent rounded-md"
             title="扩展为子节点"
             onClick={() => handleToolbarAction('expand')}
           >
-            <PlusCircle className="w-4 h-4" />
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8"/>
+              <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
           </button>
         </div>
       )}
@@ -1766,7 +1869,33 @@ ${safeCode}
           </div>
         </div>
       )}
-    </div>
+      </div>
+
+      {/* 批注/收藏右键菜单 */}
+      {annotationContextMenu && (
+        <div
+          className="fixed inset-0 z-[80]"
+          onClick={() => setAnnotationContextMenu(null)}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            setAnnotationContextMenu(null)
+          }}
+        >
+          <div
+            className="absolute z-[81] min-w-[140px] rounded-md border border-border bg-white shadow-lg py-1 text-sm text-foreground"
+            style={{ left: annotationContextMenu.x, top: annotationContextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button
+              className="w-full px-3 py-1.5 text-left hover:bg-accent transition-colors"
+              onClick={handleDeleteAnnotationOrFavorite}
+            >
+              {annotationContextMenu.targetType === 'favorite' ? '删除收藏' : '删除批注'}
+            </button>
+          </div>
+        </div>
+      )}
     </Tooltip.Provider>
   )
 }

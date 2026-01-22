@@ -2,6 +2,12 @@
 
 export type Theme = 'light' | 'dark'
 
+export interface User {
+  id: string
+  email: string
+  displayName?: string
+}
+
 export type NodeStatus =
   | 'idle'
   | 'generating'
@@ -167,12 +173,20 @@ export interface ModalState {
 export interface UserPreferences {
   theme: Theme
   language: string
-  llmProvider: 'openai' | 'azure' | 'custom'
+  apiBaseUrl?: string
+  llmProvider: 'openai' | 'azure' | 'custom' | 'ollama'
   llmModel: string
+  llmBaseUrl?: string
   apiKey?: string
-  searchProvider: 'bing' | 'google' | 'custom'
+  ollamaBaseUrl?: string
+  ollamaModel?: string
+  ollamaApiKey?: string
+  searchProvider: 'bing' | 'google' | 'custom' | 'duckduckgo'
   searchApiKey?: string
+  searchEngineId?: string
   enableSearch: boolean
+  generationLength: 'short' | 'medium' | 'long'
+  writingStyle: string
   autoSave: boolean
   autoSaveInterval: number // 分钟
 }
@@ -191,6 +205,7 @@ export interface GenerateNodeRequest {
   parentId?: string
   language?: string
   length?: 'short' | 'medium' | 'long'
+  style?: string
   tags?: string[]
   priority?: 'low' | 'medium' | 'high'
   isPublic?: boolean
@@ -238,6 +253,7 @@ export interface GenerateIdeasRequest {
   nodeId: string
   theme: string
   context?: string
+  language?: string
 }
 
 export interface GenerateIdeasResponse {

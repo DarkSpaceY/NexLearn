@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react'
+import React, { useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow,
   Background,
@@ -36,7 +36,7 @@ interface ReactFlowCanvasProps {
 }
 
 export function ReactFlowCanvas({ nodes, edges, onNodeDoubleClick: onNodeDoubleClickProp, onNodeIdeaClick }: ReactFlowCanvasProps) {
-  const { ui, updateNode, addEdge: addAppEdge, setSelectedNode, deleteNode, deleteEdge, currentProject } = useAppStore()
+  const { ui, updateNode, addEdge: addAppEdge, updateEdge: updateAppEdge, setSelectedNode, deleteNode, deleteEdge, currentProject } = useAppStore()
 
   // 转换应用节点格式为ReactFlow节点格式
   const reactFlowNodes = useMemo((): Node[] => {
@@ -162,6 +162,37 @@ export function ReactFlowCanvas({ nodes, edges, onNodeDoubleClick: onNodeDoubleC
     [deleteEdge]
   )
 
+  const edgeUpdateSuccessful = useRef(true)
+
+  const onEdgeUpdateStart = useCallback(() => {
+    edgeUpdateSuccessful.current = false
+  }, [])
+
+  const onEdgeUpdate = useCallback(
+    (oldEdge: Edge, newConnection: Connection) => {
+      if (!newConnection.source || !newConnection.target || !newConnection.sourceHandle || !newConnection.targetHandle) return
+
+      updateAppEdge(oldEdge.id, {
+        fromNodeId: newConnection.source,
+        toNodeId: newConnection.target,
+        fromAnchor: newConnection.sourceHandle as 'top' | 'bottom',
+        toAnchor: newConnection.targetHandle as 'top' | 'bottom',
+      })
+
+      edgeUpdateSuccessful.current = true
+    },
+    [updateAppEdge]
+  )
+
+  const onEdgeUpdateEnd = useCallback(
+    (_event: MouseEvent | TouchEvent, edge: Edge) => {
+      if (!edgeUpdateSuccessful.current) {
+        deleteEdge(edge.id)
+      }
+    },
+    [deleteEdge]
+  )
+
   const snapToGrid = currentProject?.settings.snapToGrid ?? false
 
   return (
@@ -172,11 +203,15 @@ export function ReactFlowCanvas({ nodes, edges, onNodeDoubleClick: onNodeDoubleC
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onEdgeUpdateStart={onEdgeUpdateStart}
+        onEdgeUpdate={onEdgeUpdate}
+        onEdgeUpdateEnd={onEdgeUpdateEnd}
         onNodeDragStop={onNodeDragStop}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={handleNodeDoubleClick}
         onNodesDelete={onNodesDelete}
         onEdgesDelete={onEdgesDelete}
+        edgesUpdatable
         deleteKeyCode={['Backspace', 'Delete']}
         snapToGrid={snapToGrid}
         snapGrid={[20, 20]}
@@ -192,7 +227,6 @@ export function ReactFlowCanvas({ nodes, edges, onNodeDoubleClick: onNodeDoubleC
         minZoom={0.1}
         maxZoom={2}
         className={ui.theme === 'dark' ? 'dark' : ''}
-        proOptions={{ hideAttribution: true }}
       >
         <Background
           variant={BackgroundVariant.Dots}
@@ -200,7 +234,7 @@ export function ReactFlowCanvas({ nodes, edges, onNodeDoubleClick: onNodeDoubleC
           size={1}
           color={ui.theme === 'dark' ? '#ffffff' : '#000000'}
         />
-        <Controls position="top-left" />
+        <Controls />
         <MiniMap
           nodeColor={ui.theme === 'dark' ? '#ffffff' : '#000000'}
           maskColor={ui.theme === 'dark' ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.2)'}

@@ -63,7 +63,13 @@ export function Canvas({ onNodeDoubleClick, onNodeIdeaClick }: CanvasProps) {
         />
       </div>
 
-      {/* 右键菜单 */}
+      {contextMenu && (
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => setContextMenu(null)}
+        />
+      )}
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}

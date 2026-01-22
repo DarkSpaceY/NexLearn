@@ -1,6 +1,7 @@
 import React from 'react'
 import { X, Moon, Sun, Settings as SettingsIcon, Database, Key } from 'lucide-react'
 import { useAppStore } from '@/stores/appStore'
+import { useAuthStore } from '@/stores/authStore'
 import { Annotation, Edge, MindMapData, Node, Project, Theme } from '@/types'
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -123,7 +124,11 @@ function normalizeEdge(raw: unknown, projectId: string): Edge | null {
   }
 }
 
-function buildProjectFromMarkdown(markdown: string, preferences: { theme: Theme; language: string; autoSave: boolean }): Project {
+function buildProjectFromMarkdown(
+  markdown: string,
+  preferences: { theme: Theme; language: string; autoSave: boolean },
+  userId: string
+): Project {
   const now = new Date()
   const firstLine = markdown.split('\n').find(line => line.trim().length > 0) || ''
   const title = firstLine.startsWith('#') ? firstLine.replace(/^#+\s*/, '').trim() : '导入项目'
@@ -147,7 +152,7 @@ function buildProjectFromMarkdown(markdown: string, preferences: { theme: Theme;
 
   return {
     id: projectId,
-    userId: 'user-1',
+    userId,
     name: title || '导入项目',
     nodes: [node],
     edges: [],
@@ -165,7 +170,11 @@ function buildProjectFromMarkdown(markdown: string, preferences: { theme: Theme;
   }
 }
 
-function buildProjectFromJson(raw: unknown, preferences: { theme: Theme; language: string; autoSave: boolean }): Project {
+function buildProjectFromJson(
+  raw: unknown,
+  preferences: { theme: Theme; language: string; autoSave: boolean },
+  userId: string
+): Project {
   if (!isRecord(raw)) throw new Error('JSON 根对象格式不正确')
 
   const projectId = typeof raw.id === 'string' ? raw.id : crypto.randomUUID()
@@ -191,7 +200,7 @@ function buildProjectFromJson(raw: unknown, preferences: { theme: Theme; languag
 
   return {
     id: projectId,
-    userId: typeof raw.userId === 'string' ? raw.userId : 'user-1',
+    userId,
     name: typeof raw.name === 'string' ? raw.name : '导入项目',
     nodes,
     edges,
@@ -212,9 +221,11 @@ function buildProjectFromJson(raw: unknown, preferences: { theme: Theme; languag
 
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { ui, preferences, setTheme, setCurrentProject, updatePreferences, nodes, edges, currentProject } = useAppStore()
+  const { user } = useAuthStore()
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const [importing, setImporting] = React.useState(false)
   const [importError, setImportError] = React.useState<string | null>(null)
+  const currentUserId = user?.id || 'anonymous'
 
   const handleThemeChange = (theme: Theme) => {
     setTheme(theme)
@@ -236,7 +247,7 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const handleExportJson = () => {
     const project = currentProject || {
       id: 'default',
-      userId: 'user-1',
+      userId: currentUserId,
       name: '默认项目',
       nodes,
       edges,
@@ -331,8 +342,8 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
 
       const project =
         ext === 'md' || file.type.includes('markdown')
-          ? buildProjectFromMarkdown(content, preferences)
-          : buildProjectFromJson(JSON.parse(content), preferences)
+          ? buildProjectFromMarkdown(content, preferences, currentUserId)
+          : buildProjectFromJson(JSON.parse(content), preferences, currentUserId)
 
       setCurrentProject(project)
       setTheme(project.settings.theme)
@@ -372,6 +383,50 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
+                <label className="text-sm font-medium">后端 API 基地址</label>
+                <input
+                  value={preferences.apiBaseUrl || ''}
+                  onChange={(e) => updatePreferences({ apiBaseUrl: e.target.value })}
+                  placeholder="http://localhost:3001/api/v1"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">默认语言</label>
+                <select
+                  value={preferences.language}
+                  onChange={(e) => updatePreferences({ language: e.target.value })}
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                >
+                  <option value="zh-CN">简体中文</option>
+                  <option value="zh-TW">繁体中文</option>
+                  <option value="en-US">English</option>
+                  <option value="ja-JP">日本語</option>
+                  <option value="ko-KR">한국어</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">默认长度</label>
+                <select
+                  value={preferences.generationLength}
+                  onChange={(e) => updatePreferences({ generationLength: e.target.value as any })}
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                >
+                  <option value="short">简短</option>
+                  <option value="medium">中等</option>
+                  <option value="long">详细</option>
+                </select>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-sm font-medium">写作风格</label>
+                <input
+                  value={preferences.writingStyle || ''}
+                  onChange={(e) => updatePreferences({ writingStyle: e.target.value })}
+                  placeholder="例如：教学风格、要点式、通俗易懂"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                />
+              </div>
+              <div className="space-y-2">
                 <label className="text-sm font-medium">LLM 提供商</label>
                 <select
                   value={preferences.llmProvider}
@@ -381,8 +436,72 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                   <option value="openai">OpenAI</option>
                   <option value="azure">Azure OpenAI</option>
                   <option value="custom">自定义</option>
+                  <option value="ollama">Ollama</option>
                 </select>
               </div>
+              {preferences.llmProvider === 'ollama' ? (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Ollama 模型</label>
+                    <input
+                      value={preferences.ollamaModel || ''}
+                      onChange={(e) => updatePreferences({ ollamaModel: e.target.value })}
+                      placeholder="phi4-mini:latest"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Ollama Base URL</label>
+                    <input
+                      value={preferences.ollamaBaseUrl || ''}
+                      onChange={(e) => updatePreferences({ ollamaBaseUrl: e.target.value })}
+                      placeholder="http://localhost:11434"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium">Ollama API Key</label>
+                    <input
+                      type="password"
+                      value={preferences.ollamaApiKey || ''}
+                      onChange={(e) => updatePreferences({ ollamaApiKey: e.target.value })}
+                      placeholder="用于 Ollama Cloud"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">LLM 模型</label>
+                    <input
+                      value={preferences.llmModel || ''}
+                      onChange={(e) => updatePreferences({ llmModel: e.target.value })}
+                      placeholder="gpt-4-turbo-preview"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">LLM Base URL</label>
+                    <input
+                      value={preferences.llmBaseUrl || ''}
+                      onChange={(e) => updatePreferences({ llmBaseUrl: e.target.value })}
+                      placeholder="https://api.openai.com/v1"
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium">LLM API Key</label>
+                    <input
+                      type="password"
+                      value={preferences.apiKey || ''}
+                      onChange={(e) => updatePreferences({ apiKey: e.target.value })}
+                      placeholder="sk-..."
+                      className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                    />
+                  </div>
+                </>
+              )}
               <div className="space-y-2">
                 <label className="text-sm font-medium">检索服务</label>
                 <select
@@ -392,9 +511,31 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
                 >
                   <option value="bing">Bing Search</option>
                   <option value="google">Google Search</option>
+                  <option value="duckduckgo">DuckDuckGo</option>
                   <option value="custom">自定义</option>
                 </select>
               </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">检索 API Key</label>
+                <input
+                  type="password"
+                  value={preferences.searchApiKey || ''}
+                  onChange={(e) => updatePreferences({ searchApiKey: e.target.value })}
+                  placeholder="Bing 或 Google API Key"
+                  className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                />
+              </div>
+              {preferences.searchProvider === 'google' && (
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm font-medium">Google Search Engine ID</label>
+                  <input
+                    value={preferences.searchEngineId || ''}
+                    onChange={(e) => updatePreferences({ searchEngineId: e.target.value })}
+                    placeholder="自定义搜索引擎 ID"
+                    className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                  />
+                </div>
+              )}
             </div>
           </section>
 

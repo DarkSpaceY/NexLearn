@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useAppStore } from '@/stores/appStore'
-import { apiClient } from '@/lib/api'
+import { apiClient, buildRequestConfig } from '@/lib/api'
 import { Node } from '@/types'
 import { buildNodeContext, parseTocFromMarkdown } from '@/lib/nodeUtils'
 
@@ -83,13 +83,16 @@ export function NodeCreateDialog({ isOpen, x, y, onClose }: NodeCreateDialogProp
     const generateInBackground = async () => {
       try {
         const context = buildNodeContext(initialNode, nodes, useAppStore.getState().edges, description.trim())
+        const config = buildRequestConfig(useAppStore.getState().preferences)
 
         const result = await apiClient.generateNode(nodeId, {
           theme: theme.trim(),
           description: description.trim() || undefined,
-          language: 'zh-CN',
-          length: 'medium',
-          context
+          language: preferences.language,
+          length: preferences.generationLength,
+          style: preferences.writingStyle || undefined,
+          context,
+          config
         })
 
         // 更新节点内容

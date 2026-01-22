@@ -1,6 +1,13 @@
 import axios from 'axios'
 import { logger } from '../utils/logger'
 
+export interface SearchRuntimeConfig {
+  provider?: 'bing' | 'google' | 'custom' | 'duckduckgo'
+  enabled?: boolean
+  apiKey?: string
+  engineId?: string
+}
+
 export interface SearchResult {
   title: string
   snippet: string
@@ -26,10 +33,23 @@ export interface GoogleSearchResponse {
   }>
 }
 
+export interface DuckDuckGoTopic {
+  Text?: string
+  FirstURL?: string
+  Topics?: DuckDuckGoTopic[]
+}
+
+export interface DuckDuckGoResponse {
+  Abstract?: string
+  AbstractText?: string
+  AbstractURL?: string
+  RelatedTopics?: DuckDuckGoTopic[]
+}
+
 export class SearchService {
-  private async searchBing(query: string): Promise<SearchResult[]> {
+  private async searchBing(query: string, config?: SearchRuntimeConfig): Promise<SearchResult[]> {
     try {
-      const apiKey = process.env.BING_SEARCH_API_KEY
+      const apiKey = config?.apiKey
       if (!apiKey) {
         logger.warn('Bing Search API key not configured, skipping Bing search')
         return []
@@ -76,10 +96,10 @@ export class SearchService {
     }
   }
 
-  private async searchGoogle(query: string): Promise<SearchResult[]> {
+  private async searchGoogle(query: string, config?: SearchRuntimeConfig): Promise<SearchResult[]> {
     try {
-      const apiKey = process.env.GOOGLE_SEARCH_API_KEY
-      const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID
+      const apiKey = config?.apiKey
+      const searchEngineId = config?.engineId
 
       if (!apiKey || !searchEngineId) {
         logger.warn('Google Search API key or engine ID not configured, skipping Google search')
@@ -124,14 +144,95 @@ export class SearchService {
     }
   }
 
-  async search(query: string): Promise<SearchResult[]> {
+  private async searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+    try {
+      const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&no_redirect=1`
+
+      logger.info('Calling DuckDuckGo Search API', { query })
+
+      const response = await axios.get<DuckDuckGoResponse>(url, {
+        timeout: 10000
+      })
+
+      const results: SearchResult[] = []
+
+      const abstractText = response.data.AbstractText?.trim()
+      const abstractUrl = response.data.AbstractURL?.trim()
+      if (abstractText && abstractUrl) {
+        results.push({
+          title: `${query} - 概览`,
+          snippet: abstractText,
+          url: abstractUrl,
+          source: 'duckduckgo'
+        })
+      }
+
+      const flattenTopics = (topics: DuckDuckGoTopic[] = []): DuckDuckGoTopic[] => {
+        const flat: DuckDuckGoTopic[] = []
+        for (const t of topics) {
+          if (t.Text && t.FirstURL) {
+            flat.push(t)
+          }
+          if (t.Topics && t.Topics.length > 0) {
+            flat.push(...flattenTopics(t.Topics))
+          }
+        }
+        return flat
+      }
+
+      const related = flattenTopics(response.data.RelatedTopics)
+      related.slice(0, 5).forEach(item => {
+        if (!item.Text || !item.FirstURL) return
+        results.push({
+          title: item.Text.split(' - ')[0] || item.Text,
+          snippet: item.Text,
+          url: item.FirstURL,
+          source: 'duckduckgo'
+        })
+      })
+
+      logger.info('DuckDuckGo search completed', {
+        query,
+        resultCount: results.length
+      })
+
+      return results
+    } catch (error: any) {
+      logger.error('DuckDuckGo search failed', {
+        error: error.message,
+        query,
+        stack: error.stack
+      })
+      return []
+    }
+  }
+
+  async search(query: string, config?: SearchRuntimeConfig): Promise<SearchResult[]> {
     try {
       logger.info('Starting search operation', { query })
 
-      // Execute both searches in parallel
+      if (config?.enabled === false) {
+        return []
+      }
+
+      const provider = config?.provider
+      if (provider === 'bing') {
+        return await this.searchBing(query, config)
+      }
+      if (provider === 'google') {
+        return await this.searchGoogle(query, config)
+      }
+      if (provider === 'duckduckgo') {
+        return await this.searchDuckDuckGo(query)
+      }
+      if (provider === 'custom') {
+        logger.warn('Custom search provider not implemented, skipping search')
+        return []
+      }
+
       const [bingResults, googleResults] = await Promise.allSettled([
-        this.searchBing(query),
-        this.searchGoogle(query)
+        this.searchBing(query, config),
+        this.searchGoogle(query, config)
       ])
 
       const allResults: SearchResult[] = []

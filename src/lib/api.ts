@@ -1,4 +1,5 @@
 // Frontend API client for NexLearn backend
+import { UserPreferences, Project, Node, Edge } from '@/types'
 
 export interface ApiResponse<T = any> {
   success: boolean
@@ -11,11 +12,60 @@ export interface ApiResponse<T = any> {
   timestamp: string
 }
 
+export interface LlmConfig {
+  provider?: 'openai' | 'azure' | 'custom' | 'ollama'
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+  ollamaBaseUrl?: string
+  ollamaModel?: string
+  ollamaApiKey?: string
+}
+
+export interface SearchConfig {
+  provider?: 'bing' | 'google' | 'custom' | 'duckduckgo'
+  enabled?: boolean
+  apiKey?: string
+  engineId?: string
+}
+
+export interface RequestConfig {
+  llm?: LlmConfig
+  search?: SearchConfig
+}
+
+export const buildRequestConfig = (preferences: UserPreferences): RequestConfig => ({
+  llm: {
+    provider: preferences.llmProvider,
+    apiKey: preferences.apiKey,
+    baseUrl: preferences.llmBaseUrl,
+    model: preferences.llmModel,
+    ollamaBaseUrl: preferences.ollamaBaseUrl,
+    ollamaModel: preferences.ollamaModel,
+    ollamaApiKey: preferences.ollamaApiKey,
+  },
+  search: {
+    provider: preferences.searchProvider,
+    enabled: preferences.enableSearch,
+    apiKey: preferences.searchApiKey,
+    engineId: preferences.searchEngineId,
+  }
+})
+
+const normalizeBaseUrl = (raw?: string): string => {
+  const trimmed = (raw || '').trim()
+  if (!trimmed) return ''
+  const withoutSlash = trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
+  return withoutSlash.endsWith('/api/v1') ? withoutSlash : `${withoutSlash}/api/v1`
+}
+
 export interface GenerateNodeRequest {
   theme: string
   description?: string
   language?: string
   length?: 'short' | 'medium' | 'long'
+  style?: string
+  config?: RequestConfig
   context?: {
     visibleText?: string
     nodeTree?: string
@@ -43,6 +93,8 @@ export interface GenerateNodeResponse {
 
 export interface GenerateIdeasRequest {
   theme: string
+  language?: string
+  config?: RequestConfig
   context?: {
     visibleText?: string
     nodeTree?: string
@@ -88,6 +140,7 @@ export interface TableOfContentsItem {
 export interface ChatRequest {
   message: string
   history?: Array<{ role: 'user' | 'assistant'; content: string }>
+  config?: RequestConfig
   context?: {
     visibleText?: string
     nodeTree?: string
@@ -115,6 +168,28 @@ export interface ExecuteCodeResponse {
   output?: string
 }
 
+export interface RegisterRequest {
+  email: string
+  password: string
+  displayName?: string
+}
+
+export interface RegisterResponse {
+  user: { id: string; email: string; displayName?: string }
+}
+
+export interface LoginRequest {
+  email: string
+  password: string
+}
+
+export interface LoginResponse {
+  user: { id: string; email: string; displayName?: string }
+}
+
+export interface CurrentUserResponse {
+  user: { id: string; email: string; displayName?: string }
+}
 export interface MindMapNode {
   id: string
   text: string
@@ -137,6 +212,7 @@ export interface MindMapData {
 export interface GenerateMindMapRequest {
   content: string
   language?: string
+  config?: RequestConfig
 }
 
 export interface GenerateMindMapResponse {
@@ -147,6 +223,7 @@ export interface GenerateMindMapResponse {
 export interface GenerateAnimationRequest {
   description: string
   context?: any
+  config?: RequestConfig
 }
 
 export interface GenerateAnimationResponse {
@@ -154,17 +231,63 @@ export interface GenerateAnimationResponse {
   generatedAt: string
 }
 
+// 项目相关 API 类型（用于后端持久化）
+export interface ProjectDto {
+  id: string
+  userId: string
+  name: string
+  nodes: Node[]
+  edges: Edge[]
+  settings: {
+    theme: string
+    defaultLanguage: string
+    autoSave: boolean
+    showGrid: boolean
+    snapToGrid: boolean
+    [key: string]: any
+  }
+  metadata: {
+    createdAt: string
+    updatedAt: string
+    lastOpenedAt?: string
+    [key: string]: any
+  }
+  [key: string]: any
+}
+
+export interface CurrentProjectResponse {
+  project: ProjectDto | null
+}
+
+export interface PreferencesResponse {
+  preferences: UserPreferences | null
+}
+
+
 class ApiClient {
   private baseUrl: string | null = null
   private candidates: string[] = []
+  private manualBaseUrl: string | null = null
 
   constructor() {
-    const envUrl = (import.meta as any).env?.VITE_API_BASE_URL || ''
+    this.candidates = this.buildCandidates()
+  }
+
+  setPreferredBaseUrl(baseUrl?: string) {
+    const normalized = normalizeBaseUrl(baseUrl)
+    this.manualBaseUrl = normalized || null
+    this.baseUrl = null
+    this.candidates = this.buildCandidates()
+  }
+
+  private buildCandidates(): string[] {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
     const ports = [3001, 3002, 3003, 3004, 3005]
     const bases = ports.map(p => `http://${host}:${p}/api/v1`)
     const alts = ports.map(p => `http://127.0.0.1:${p}/api/v1`)
-    this.candidates = [envUrl].filter(Boolean).concat(bases).concat(alts)
+    const list: string[] = []
+    if (this.manualBaseUrl) list.push(this.manualBaseUrl)
+    return list.concat(bases).concat(alts)
   }
 
   private async ensureBaseUrl(): Promise<void> {
@@ -188,44 +311,56 @@ class ApiClient {
     endpoint: string,
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
-    try {
-      await this.ensureBaseUrl()
-      const url = `${this.baseUrl}${endpoint}`
+    const performRequest = async (baseUrl: string | null): Promise<ApiResponse<T>> => {
+      const url = `${baseUrl}${endpoint}`
       const response = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
           ...options.headers,
         },
+        credentials: 'include',
         ...options,
       })
 
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error?.message || 'API request failed')
+      let data: any = null
+      try {
+        data = await response.json()
+      } catch {
+        data = null
       }
 
-      return data
+      if (!response.ok) {
+        const message =
+          (data && data.error && typeof data.error.message === 'string'
+            ? data.error.message
+            : response.statusText || 'API request failed')
+        const error: any = new Error(message)
+        error.status = response.status
+        if (response.status === 401) {
+          error.code = 'UNAUTHORIZED'
+        }
+        throw error
+      }
+
+      return data as ApiResponse<T>
+    }
+
+    try {
+      await this.ensureBaseUrl()
+      return await performRequest(this.baseUrl)
     } catch (error: any) {
+      if (error && (error.code === 'UNAUTHORIZED' || error.status === 401)) {
+        throw error
+      }
       try {
         this.baseUrl = null
         await this.ensureBaseUrl()
-        const url = `${this.baseUrl}${endpoint}`
-        const response = await fetch(url, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...options.headers,
-          },
-          ...options,
-        })
-        const data = await response.json()
-        if (!response.ok) {
-          throw new Error(data.error?.message || 'API request failed')
+        return await performRequest(this.baseUrl)
+      } catch (e: any) {
+        if (!(e && (e.code === 'UNAUTHORIZED' || e.status === 401))) {
+          console.error('API request failed:', e)
         }
-        return data
-      } catch (e) {
-        console.error('API request failed:', error)
-        throw error
+        throw e
       }
     }
   }
@@ -426,12 +561,13 @@ class ApiClient {
   // Mindmap with fallback (safe)
   async generateAnimationSafe(
     description: string,
-    context?: any
+    context?: any,
+    config?: RequestConfig
   ): Promise<GenerateAnimationResponse> {
     try {
       const response = await this.request<GenerateAnimationResponse>('/animation', {
         method: 'POST',
-        body: JSON.stringify({ description, context }),
+        body: JSON.stringify({ description, context, config }),
       })
       if (!response.data) throw new Error('No data returned')
       return response.data
@@ -513,6 +649,130 @@ class ApiClient {
       mindmap: { nodes, edges },
       generatedAt: new Date().toISOString(),
     }
+  }
+
+  async register(req: RegisterRequest) {
+    return this.request<RegisterResponse>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    })
+  }
+
+  async login(req: LoginRequest) {
+    return this.request<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(req),
+    })
+  }
+
+  async logout() {
+    return this.request<{ ok: boolean }>('/auth/logout', {
+      method: 'POST',
+    })
+  }
+
+  async me() {
+    return this.request<CurrentUserResponse>('/auth/me', {
+      method: 'GET',
+    })
+  }
+
+  async getPreferences(): Promise<UserPreferences | null> {
+    const response = await this.request<PreferencesResponse>('/user/preferences', {
+      method: 'GET',
+    })
+
+    if (!response.success || !response.data) {
+      throw new Error(response.error?.message || 'Get preferences failed')
+    }
+
+    return response.data.preferences || null
+  }
+
+  async savePreferences(preferences: UserPreferences): Promise<void> {
+    const response = await this.request<{ ok: boolean }>('/user/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ preferences }),
+    })
+
+    if (!response.success) {
+      throw new Error(response.error?.message || 'Save preferences failed')
+    }
+  }
+
+  // 获取后端保存的“当前项目”
+  async getCurrentProject(): Promise<ProjectDto | null> {
+    const response = await this.request<CurrentProjectResponse>('/projects/current', {
+      method: 'GET',
+    })
+
+    if (!response.success || !response.data) {
+      throw new Error(response.error?.message || 'Get current project failed')
+    }
+
+    return response.data.project || null
+  }
+
+  private toIsoString(value: unknown): string {
+    if (value instanceof Date) {
+      return value.toISOString()
+    }
+    if (typeof value === 'string') {
+      const d = new Date(value)
+      if (!Number.isNaN(d.getTime())) {
+        return d.toISOString()
+      }
+    }
+    const d = new Date()
+    return d.toISOString()
+  }
+
+  private toOptionalIsoString(value: unknown): string | undefined {
+    if (value == null) return undefined
+    if (value instanceof Date) {
+      return value.toISOString()
+    }
+    if (typeof value === 'string') {
+      const d = new Date(value)
+      if (!Number.isNaN(d.getTime())) {
+        return d.toISOString()
+      }
+    }
+    return undefined
+  }
+
+  // 保存当前项目到后端
+  async saveCurrentProject(project: Project): Promise<ProjectDto> {
+    const payload: ProjectDto = {
+      id: project.id,
+      userId: project.userId,
+      name: project.name,
+      nodes: project.nodes as Node[],
+      edges: project.edges as Edge[],
+      settings: {
+        theme: project.settings.theme,
+        defaultLanguage: project.settings.defaultLanguage,
+        autoSave: project.settings.autoSave,
+        showGrid: project.settings.showGrid,
+        snapToGrid: project.settings.snapToGrid,
+      },
+      metadata: {
+        createdAt: this.toIsoString((project.metadata as any).createdAt),
+        updatedAt: this.toIsoString((project.metadata as any).updatedAt),
+        lastOpenedAt: this.toOptionalIsoString((project.metadata as any).lastOpenedAt),
+      },
+    }
+
+    const response = await this.request<{ project: ProjectDto }>('/projects/current', {
+      method: 'PUT',
+      body: JSON.stringify({ project: payload }),
+    })
+
+    if (!response.success || !response.data) {
+      throw new Error(response.error?.message || 'Save project failed')
+    }
+
+    return response.data.project
   }
 }
 

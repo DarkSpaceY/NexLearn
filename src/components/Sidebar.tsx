@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react'
 import { X, Send, Loader2 } from 'lucide-react'
 import { useAppStore } from '@/stores/appStore'
-import { apiClient } from '@/lib/api'
+import { apiClient, buildRequestConfig } from '@/lib/api'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -49,12 +49,14 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
       }
 
       // 调用 API：优先使用真实接口，不可用时自动回退到占位实现
+      const config = buildRequestConfig(useAppStore.getState().preferences)
       const response = await apiClient.chatSafe({
         message: userMessageContent,
         history: useAppStore.getState().chat.messages
           .filter(m => m.role === 'user' || m.role === 'assistant')
           .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-        context
+        context,
+        config
       })
 
       const aiMessage = {

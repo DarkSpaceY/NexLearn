@@ -4,20 +4,34 @@ import { validateRequest } from '../middleware/validateRequest'
 import { llmService } from '../services/llm'
 import { logger } from '../utils/logger'
 import { AppError } from '../middleware/errorHandler'
+import { searchService, SearchResult } from '../services/search'
 
 const router = express.Router()
+
+const formatSearchResults = (results: SearchResult[]) => {
+  if (!results || results.length === 0) return '暂无检索结果'
+  return results
+    .slice(0, 5)
+    .map((r, index) => `${index + 1}. ${r.title}: ${r.snippet}`)
+    .join('\n')
+}
 
 router.post(
   '/',
   [
     body('description').isString().notEmpty().withMessage('Description is required'),
     body('context').optional().isObject(),
+    body('config').optional().isObject(),
     validateRequest
   ],
   async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
-      const { description, context } = req.body
+      const { description, context, config } = req.body
       logger.info('Generating animation code', { descriptionLength: description.length })
+
+      const searchResults = await searchService.search(description, config?.search)
+      const formattedSearchResults = formatSearchResults(searchResults)
+      const mergedContext = { ...(context || {}), searchResults }
 
       const prompt = `
       You are an expert frontend developer specializing in creating interactive educational visualizations using HTML5, CSS, and vanilla JavaScript.
@@ -32,16 +46,14 @@ router.post(
       5. **Design**: Use modern, clean styling (Apple-like aesthetics). Use a neutral background color that works well in both light and dark modes (e.g., #f9fafb or transparent with defined container styles).
       6. **Instructions**: Include brief on-screen instructions telling the user how to interact (e.g., "Drag the ball...", "Click to simulate...").
 
-      Context: ${JSON.stringify(context || {})}
+      检索摘要（来自联网检索）：
+      ${formattedSearchResults}
+
+      Context: ${JSON.stringify(mergedContext)}
 
       Response Format:
       Return ONLY the raw HTML code. Do NOT wrap in markdown code blocks.
       `
-
-      const messages = [
-        { role: 'system', content: 'You are a generator of interactive educational web content.' },
-        { role: 'user', content: prompt }
-      ]
 
       // We reuse the chat method or call llm directly. 
       // Since llmService.chat is designed for chat, we might want a raw generation method.
@@ -51,7 +63,7 @@ router.post(
       // Looking at llm.ts (from memory), chat calls callOllama/callOpenAI.
       // We can add a method 'generateCode' to llmService or just use chat and strip markdown.
       
-      const response = await llmService.chat({ message: prompt })
+      const response = await llmService.chat({ message: prompt }, config?.llm)
       
       // Clean up response (remove markdown code blocks if present)
       let code = response.replace(/^```html\n/, '').replace(/^```\n/, '').replace(/\n```$/, '')

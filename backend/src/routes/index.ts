@@ -3,14 +3,20 @@ import nodeRoutes from './nodes'
 import searchRoutes from './search'
 import chatRoutes from './chat'
 import animationRoutes from './animation'
+import authRoutes from './auth'
+import projectRoutes from './projects'
+import userRoutes from './user'
 
 const router = express.Router()
 
 // Mount sub-routes
+router.use('/auth', authRoutes)
 router.use('/nodes', nodeRoutes)
 router.use('/search', searchRoutes)
 router.use('/chat', chatRoutes)
 router.use('/animation', animationRoutes)
+router.use('/projects', projectRoutes)
+router.use('/user', userRoutes)
 
 // Health check
 router.get('/health', (req, res) => {

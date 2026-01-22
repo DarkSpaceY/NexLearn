@@ -25,18 +25,20 @@ router.post('/:id/generate',
     body('description').optional().isString(),
     body('language').optional().isIn(['zh-CN', 'zh-TW', 'en-US', 'ja-JP', 'ko-KR']).withMessage('Invalid language'),
     body('length').optional().isIn(['short', 'medium', 'long']).withMessage('Invalid length'),
+    body('style').optional().isString().isLength({ min: 0, max: 200 }).withMessage('Invalid style'),
     body('context').optional().isObject(),
+    body('config').optional().isObject(),
     validateRequest
   ],
   async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
       const { id } = req.params
-      const { theme, description, language = 'zh-CN', length = 'medium', context } = req.body
+      const { theme, description, language = 'zh-CN', length = 'medium', style, context, config } = req.body
 
       logger.info('Generating node content', { nodeId: id, theme, language, length })
 
       // Step 1: Perform search
-      const searchResults = await searchService.search(theme)
+      const searchResults = await searchService.search(theme, config?.search)
 
       // Step 2: Generate content using LLM
       const generatedContent = await llmService.generateNodeContent({
@@ -44,9 +46,10 @@ router.post('/:id/generate',
         searchResults,
         language,
         length,
+        style,
         context,
         description
-      })
+      }, config?.llm)
 
       // Step 3: Parse response (handle markdown code blocks)
       let parsedContent: any
@@ -98,25 +101,27 @@ router.post('/:id/ideas',
     param('id').exists().withMessage('Node ID is required'),
     body('theme').isString().isLength({ min: 1, max: 200 }).withMessage('Theme must be 1-200 characters'),
     body('context').optional().isObject(),
+    body('language').optional().isIn(['zh-CN', 'zh-TW', 'en-US', 'ja-JP', 'ko-KR']).withMessage('Invalid language'),
+    body('config').optional().isObject(),
     validateRequest
   ],
   async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
       const { id } = req.params
-      const { theme, context } = req.body
+      const { theme, context, config, language = 'zh-CN' } = req.body
 
       logger.info('Generating node ideas', { nodeId: id, theme, hasContext: !!context })
 
       // Step 1: Search for related topics
-      const searchResults = await searchService.search(theme)
+      const searchResults = await searchService.search(theme, config?.search)
 
       // Step 2: Generate ideas using LLM with context
       const ideas = await llmService.generateIdeas({
         theme,
         searchResults,
-        language: 'zh-CN',
+        language,
         context
-      })
+      }, config?.llm)
 
       // Step 3: Parse ideas (handle markdown code blocks)
       let ideaList: string[]
@@ -165,12 +170,13 @@ router.post('/:id/mindmap',
     param('id').exists().withMessage('Node ID is required'),
     body('content').isString().isLength({ min: 1 }).withMessage('Content is required'),
     body('language').optional().isIn(['zh-CN', 'zh-TW', 'en-US', 'ja-JP', 'ko-KR']).withMessage('Invalid language'),
+    body('config').optional().isObject(),
     validateRequest
   ],
   async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
       const { id } = req.params
-      const { content, language = 'zh-CN' } = req.body
+      const { content, language = 'zh-CN', config } = req.body
 
       logger.info('Generating mindmap', { nodeId: id, language })
 
@@ -180,13 +186,13 @@ router.post('/:id/mindmap',
         return (content || '').slice(0, 120)
       })()
 
-      const searchResults = await searchService.search(query)
+      const searchResults = await searchService.search(query, config?.search)
 
       const resp = await llmService.generateMindMap({
         content,
         language,
         searchResults
-      })
+      }, config?.llm)
 
       let mindmap: any
       try {

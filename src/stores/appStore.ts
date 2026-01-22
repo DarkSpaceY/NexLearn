@@ -68,6 +68,23 @@ interface AppActions {
   reset: () => void
 }
 
+const resolveUserId = () => {
+  if (typeof window === 'undefined') return 'anonymous'
+  return window.localStorage.getItem('nexlearn-current-user') || 'anonymous'
+}
+
+const userScopedStorage = {
+  async getItem(name: string) {
+    return localforage.getItem<string>(`${name}:${resolveUserId()}`)
+  },
+  async setItem(name: string, value: string) {
+    await localforage.setItem(`${name}:${resolveUserId()}`, value)
+  },
+  async removeItem(name: string) {
+    return localforage.removeItem(`${name}:${resolveUserId()}`)
+  },
+}
+
 // 创建默认状态
 const createDefaultState = (): AppState => ({
   currentProject: null,
@@ -97,8 +114,18 @@ const createDefaultState = (): AppState => ({
     language: 'zh-CN',
     llmProvider: 'openai',
     llmModel: 'gpt-4',
+    apiBaseUrl: '',
+    llmBaseUrl: '',
+    apiKey: '',
+    ollamaBaseUrl: '',
+    ollamaModel: '',
+    ollamaApiKey: '',
     searchProvider: 'bing',
+    searchApiKey: '',
+    searchEngineId: '',
     enableSearch: true,
+    generationLength: 'medium',
+    writingStyle: '',
     autoSave: true,
     autoSaveInterval: 5,
   },
@@ -131,7 +158,7 @@ export const useAppStore = create<AppState & AppActions>()(
       createProject: async (name) => {
         const newProject: Project = {
           id: crypto.randomUUID(),
-          userId: 'user-1', // TODO: 从认证系统获取
+          userId: resolveUserId(),
           name,
           nodes: [],
           edges: [],
@@ -369,9 +396,11 @@ export const useAppStore = create<AppState & AppActions>()(
     }),
     {
       name: 'nexlearn-storage',
-      storage: createJSONStorage(() => localforage),
+      storage: createJSONStorage(() => userScopedStorage),
       partialize: (state) => ({
         currentProject: state.currentProject,
+        nodes: state.nodes,
+        edges: state.edges,
         preferences: state.preferences,
         ui: {
           theme: state.ui.theme,

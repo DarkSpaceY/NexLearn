@@ -2,7 +2,7 @@ import React from 'react'
 import { Handle, Position, NodeProps } from 'reactflow'
 import { Node as AppNode } from '@/types'
 import { useAppStore } from '@/stores/appStore'
-import { apiClient } from '@/lib/api'
+import { apiClient, buildRequestConfig } from '@/lib/api'
 import { buildNodeContext, parseTocFromMarkdown } from '@/lib/nodeUtils'
 
 function GeneratingState() {
@@ -53,6 +53,7 @@ export function ReactFlowNode({ data, selected }: NodeProps<ReactFlowNodeData>) 
   const { ui, updateNode, deleteNode, preferences } = useAppStore()
   const { node, onIdeaClick, onDoubleClick } = data
   const isDark = ui.theme === 'dark'
+  const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
 
   const handleDoubleClick = () => {
     onDoubleClick?.(node)
@@ -83,13 +84,16 @@ export function ReactFlowNode({ data, selected }: NodeProps<ReactFlowNodeData>) 
       const nodes = useAppStore.getState().nodes
       const edges = useAppStore.getState().edges
       const context = buildNodeContext(node, nodes, edges, node.summary || '')
+      const config = buildRequestConfig(useAppStore.getState().preferences)
 
       const result = await apiClient.generateNode(node.id, {
         theme: node.theme,
         description: node.summary,
-        language: 'zh-CN',
-        length: 'medium',
-        context
+        language: preferences.language,
+        length: preferences.generationLength,
+        style: preferences.writingStyle || undefined,
+        context,
+        config
       })
 
       updateNode(node.id, {
@@ -116,12 +120,17 @@ export function ReactFlowNode({ data, selected }: NodeProps<ReactFlowNodeData>) 
   }
 
   const handleDeleteClick = () => {
-    // 显示确认对话框
-    const confirmed = window.confirm(`确定要删除节点"${node.theme}"吗？\n\n这将同时删除与该节点相关的所有连线。`)
-    if (confirmed) {
-      // 从store中删除节点和相关边
-      deleteNode(node.id)
-    }
+    // 打开自定义删除确认界面
+    setShowDeleteConfirm(true)
+  }
+
+  const handleConfirmDelete = () => {
+    deleteNode(node.id)
+    setShowDeleteConfirm(false)
+  }
+
+  const handleCancelDelete = () => {
+    setShowDeleteConfirm(false)
   }
 
   return (
@@ -137,6 +146,39 @@ export function ReactFlowNode({ data, selected }: NodeProps<ReactFlowNodeData>) 
       `}
       onDoubleClick={handleDoubleClick}
     >
+      {showDeleteConfirm && (
+        <div
+          className={`
+            absolute right-[-190px] top-2 w-44 rounded-md border text-xs shadow-lg z-20
+            ${isDark ? 'bg-gray-900 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'}
+          `}
+        >
+          <div className="px-3 py-2">
+            <div className="mb-2">
+              确定要删除该节点？
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={handleCancelDelete}
+                className={`px-2 py-0.5 rounded border text-xs ${
+                  isDark
+                    ? 'border-gray-600 hover:bg-gray-800'
+                    : 'border-gray-300 hover:bg-gray-100'
+                }`}
+              >
+                取消
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="px-2 py-0.5 rounded text-xs bg-red-500 text-white hover:bg-red-600"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 连接点 - 顶部 */}
       <Handle
         type="target"

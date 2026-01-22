@@ -37,6 +37,10 @@ Thumbs.db
 .eslintcache
 .vite/
 backend/uv.lock
+backend/data/
+coverage/
+.nyc_output/
+.turbo/
+.trae/
 
 # Trae metadata (Optional, depending on user preference)
-# .trae/
